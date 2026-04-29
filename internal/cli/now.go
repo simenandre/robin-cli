@@ -75,13 +75,18 @@ Configure quick_book in your config file before using this:
   # see the pick without booking
   robin now --dry-run
 
-  # start search 1h from now
+  # natural language: tomorrow morning, in 2 hours, next monday at 14:00
+  robin now --when tomorrow
+  robin now --when "tomorrow 9am"
+  robin now --when "in 2 hours"
+  robin now --when "next monday at 14:00"
+
+  # strict forms also work
   robin now --when 1h
-
-  # start search at 14:00 today
   robin now --when 14:00
+  robin now --when "2026-04-30 09:00"
 
-  # ignore priority list, take the longest available room
+  # ignore priority, take the longest available room
   robin now --prioritize-length
 
   # cap booking length at 60 min
@@ -256,7 +261,7 @@ Configure quick_book in your config file before using this:
 		},
 	}
 
-	cmd.Flags().StringVar(&whenStr, "when", "", "search start: '1h', '14:00', '2026-04-29 09:00' (default: now)")
+	cmd.Flags().StringVar(&whenStr, "when", "", "search anchor: '1h', '14:00', 'tomorrow 9am', 'in 2 hours', '2026-04-29 09:00' (default: now)")
 	cmd.Flags().IntVar(&minMin, "min", 0, "minimum slot length in minutes (default: from config or 30)")
 	cmd.Flags().IntVar(&maxMin, "max", 0, "maximum booking length in minutes (default: from config or 120)")
 	cmd.Flags().IntVar(&windowMin, "window", 0, "search window in minutes (default: from config or 30)")

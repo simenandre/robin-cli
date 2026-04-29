@@ -59,15 +59,35 @@ Looks up `quick_book.priority` in your config, finds the room with the
 Falls back to other meeting rooms if no priority room is available.
 
 ```sh
-robin now                    # book now (or up to 30 min from now)
-robin now --dry-run          # see the pick without booking
-robin now --when 1h          # search starting 1 hour from now
-robin now --when 14:00       # search starting at 14:00 today
+robin now                       # book now (or up to 30 min from now)
+robin now --dry-run             # see the pick without booking
+
+# strict forms
+robin now --when 1h             # 1 hour from now
+robin now --when 14:00          # 14:00 today
 robin now --when "2026-04-30 09:00"
-robin now --max 60           # cap booking length at 60 min
-robin now --prioritize-length
-                             # take longest slot anywhere; priority only tiebreaks
+
+# natural language (any of these work)
+robin now --when tomorrow
+robin now --when "tomorrow 9am"
+robin now --when "in 2 hours"
+robin now --when "monday 9am"          # upcoming Monday
+robin now --when "next monday at 14:00"
+
+robin now --max 60              # cap booking length at 60 min
+robin now --prioritize-length   # ignore priority, take longest slot anywhere
 ```
+
+`--when` accepts (in order of precedence):
+
+1. `now` (or empty) — current time
+2. Go duration: `1h`, `30m`, `2h30m`
+3. Clock time today: `14:00`, `09:30`
+4. Strict datetime: `2026-04-29 09:00`, `2026-04-29T09:00`, RFC3339
+5. **Natural language** (English, future-direction): `tomorrow`,
+   `tomorrow 9am`, `in 2 hours`, `monday 9am`, `next friday`, `9am`,
+   `yesterday`. Powered by [`go-naturaldate`](https://github.com/tj/go-naturaldate);
+   if a phrase is ambiguous prefer the explicit `2026-04-30 14:00` form.
 
 | flag | meaning |
 |---|---|

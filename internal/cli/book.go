@@ -26,13 +26,19 @@ func newBookCmd(io *IO) *cobra.Command {
 		Use:   "book",
 		Short: "Book a specific space.",
 		Long: `Creates an event in the given space. Provide either --end or --duration
-(not both). Times accept RFC3339 (2026-04-29T09:00:00+02:00) or local
-forms (2026-04-29 09:00, 2026-04-29T09:00:00).
+(not both).
+
+--start and --end accept:
+  - clock time today: "14:00"
+  - duration (relative to now, --start only): "1h", "30m"
+  - natural language: "tomorrow 9am", "in 2 hours", "next monday at 14:00"
+  - strict datetime: "2026-04-29 09:00", RFC3339
 
 Robin requires events to be at least 5 minutes long.`,
-		Example: `  robin book --space 172344 --start "2026-04-29 14:00" --duration 30m
-  robin book --space 172344 --start "2026-04-29T14:00:00+02:00" --end "2026-04-29T15:00:00+02:00" --title "Sync"
-  robin book --space 172344 --start "14:00" --duration 1h --yes`,
+		Example: `  robin book --space 172344 --start "tomorrow 9am" --duration 30m
+  robin book --space 172344 --start "14:00" --duration 1h --yes
+  robin book --space 172344 --start "2026-04-29 14:00" --duration 30m
+  robin book --space 172344 --start "2026-04-29T14:00:00+02:00" --end "2026-04-29T15:00:00+02:00" --title "Sync"`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if spaceID == 0 || startStr == "" {

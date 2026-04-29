@@ -7,6 +7,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/simenandre/robin-user-api/internal/robin"
+	naturaldate "github.com/tj/go-naturaldate"
 )
 
 // authedClient returns a Robin client backed by the cached session.
@@ -23,14 +24,22 @@ func authedClient(io *IO) (*robin.Client, error) {
 	return c, nil
 }
 
-// parseWhenOrTime accepts:
-//   - "now"
-//   - a duration: "1h", "30m", "2h30m" (relative to base)
-//   - clock time today: "14:00"
-//   - full datetime: "2026-04-29 09:00", "2026-04-29T09:00", RFC3339
+// parseWhenOrTime resolves a user-supplied time expression. Tried in order:
+//
+//  1. "now" or empty → base
+//  2. Go duration: "1h", "30m", "2h30m" → base + d
+//  3. Clock time today: "14:00", "09:30"
+//  4. Strict datetime: RFC3339, "2006-01-02 15:04", "2006-01-02T15:04",
+//     "2006-01-02 15:04:05"
+//  5. Natural language (English): "tomorrow", "tomorrow 9am",
+//     "next monday at 14:00", "in 2 hours", "noon", "9am" — handled by
+//     github.com/tj/go-naturaldate, which mirrors GNU date -d / `at` style.
+//
+// All resolved times are anchored to the supplied tz when the input itself
+// doesn't carry an offset.
 func parseWhenOrTime(s string, base time.Time, tz *time.Location) (time.Time, error) {
 	s = strings.TrimSpace(s)
-	if s == "" || s == "now" {
+	if s == "" || strings.EqualFold(s, "now") {
 		return base, nil
 	}
 	if d, err := time.ParseDuration(s); err == nil {
@@ -48,7 +57,13 @@ func parseWhenOrTime(s string, base time.Time, tz *time.Location) (time.Time, er
 			return t, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("could not parse %q (expected '1h', '14:00', or '2026-04-29 09:00')", s)
+	// naturaldate defaults ambiguous phrases ("monday", "april") to the past.
+	// For a meeting-booking CLI, "monday" almost always means the upcoming
+	// Monday — so resolve forward.
+	if t, err := naturaldate.Parse(s, base, naturaldate.WithDirection(naturaldate.Future)); err == nil && !t.IsZero() && !t.Equal(base) {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("could not parse %q (try '1h', '14:00', 'tomorrow 9am', or '2026-04-29 09:00')", s)
 }
 
 func boldCmd(s string) string {
