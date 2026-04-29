@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/simenandre/robin-user-api/internal/robin"
+	"github.com/simenandre/robin-cli/internal/robin"
 	naturaldate "github.com/tj/go-naturaldate"
 )
 

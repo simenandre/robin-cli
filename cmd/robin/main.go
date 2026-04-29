@@ -5,7 +5,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/simenandre/robin-user-api/internal/cli"
+	"github.com/simenandre/robin-cli/internal/cli"
 )
 
 func main() {

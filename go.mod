@@ -1,4 +1,4 @@
-module github.com/simenandre/robin-user-api
+module github.com/simenandre/robin-cli
 
 go 1.26.1
 

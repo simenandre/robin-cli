@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simenandre/robin-user-api/internal/config"
-	"github.com/simenandre/robin-user-api/internal/robin"
+	"github.com/simenandre/robin-cli/internal/config"
+	"github.com/simenandre/robin-cli/internal/robin"
 	"github.com/spf13/cobra"
 )
 

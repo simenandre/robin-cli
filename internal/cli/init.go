@@ -7,7 +7,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/simenandre/robin-user-api/internal/config"
+	"github.com/simenandre/robin-cli/internal/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

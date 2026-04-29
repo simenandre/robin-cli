@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/simenandre/robin-user-api/internal/config"
+	"github.com/simenandre/robin-cli/internal/config"
 )
 
 type Session struct {

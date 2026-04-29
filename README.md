@@ -14,7 +14,7 @@ $ robin book
 ## Install
 
 ```sh
-go install github.com/simenandre/robin-user-api/cmd/robin@latest
+go install github.com/simenandre/robin-cli/cmd/robin@latest
 ```
 
 Requires Go 1.26+.
@@ -30,7 +30,7 @@ robin book     # book the best priority room right now
 
 Credentials and the access token live under your OS config directory
 (macOS `~/Library/Application Support/robin/`, Linux `~/.config/robin/`),
-mode `0600`. See [Config](#config) below to enable `robin now`.
+mode `0600`. See [Config](#config) below to enable auto-pick.
 
 ## Commands
 
@@ -122,19 +122,21 @@ length instead of maximizing.
 | `--title`, `--description` | event metadata |
 | `--time-zone` | IANA timezone (default: from config, else `Europe/Oslo`) |
 
+#### Auto-pick flags
+
 | flag | meaning |
 |---|---|
-| `--when` | Search anchor. Duration (`1h`, `30m`), today's clock time (`14:00`), or full datetime. Default: now. |
+| `--start` | Earliest acceptable start (default: now). |
+| `--duration`, `-d` | Lock booking to a fixed length instead of maximizing. |
 | `--min N` | Minimum acceptable slot length (minutes). |
 | `--max N` | Cap on booking length (minutes). |
-| `--window N` | How far past the anchor a slot may start (minutes). |
+| `--window N` | How far past `--start` a slot may start (minutes). |
 | `--prioritize-length`, `-L` | Rank all rooms by length, ignoring priority order. |
-| `-n`, `--dry-run` | Find the best room and print it; don't book. |
-| `--title` | Event title (otherwise Robin auto-generates one). |
+| `--dry-run`, `-n` | Find the best room and print it; don't book. |
 
 ## Config
 
-`robin init` writes a starter `config.json`. To enable `robin now`, add a
+`robin init` writes a starter `config.json`. To enable auto-pick, add a
 `quick_book` block:
 
 ```json

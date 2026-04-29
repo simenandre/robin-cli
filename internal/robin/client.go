@@ -14,7 +14,7 @@ import (
 
 const (
 	apiBase   = "https://api.robinpowered.com/v1.0"
-	userAgent = "robin-user-api/0.1 (+https://github.com/simenandre/robin-user-api)"
+	userAgent = "robin-cli/0.1 (+https://github.com/simenandre/robin-cli)"
 )
 
 type Client struct {

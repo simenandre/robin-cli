@@ -8,8 +8,8 @@ import (
 var Version = "dev"
 
 const (
-	repoURL = "https://github.com/simenandre/robin-user-api"
-	docsURL = "https://github.com/simenandre/robin-user-api#readme"
+	repoURL = "https://github.com/simenandre/robin-cli"
+	docsURL = "https://github.com/simenandre/robin-cli#readme"
 )
 
 func NewRootCmd(io *IO) *cobra.Command {

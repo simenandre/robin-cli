@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/simenandre/robin-user-api/internal/robin"
+	"github.com/simenandre/robin-cli/internal/robin"
 )
 
 // Picker logic for auto-pick bookings: find the best meeting room for a slot
