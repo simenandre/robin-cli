@@ -25,16 +25,19 @@ access token under your OS config directory.`,
   robin init
   robin login
 
-  # find and book the best priority room right now
-  robin now
+  # find and book the best priority room right now (alias: 'robin now')
+  robin book
 
-  # see what would be booked, but don't book
-  robin now --dry-run
+  # see what would be booked
+  robin book --dry-run
 
-  # book starting in one hour
-  robin now --when 1h
+  # book a room starting tomorrow at 9
+  robin book --start "tomorrow 9am"
 
-  # list all bookable spaces in your location
+  # book a specific room
+  robin book --space 172344 --start "14:00" --duration 30m
+
+  # list bookable spaces in your location
   robin spaces`,
 		Version:           Version,
 		SilenceUsage:      true,
@@ -58,7 +61,6 @@ access token under your OS config directory.`,
 		newLocationsCmd(io),
 		newSpacesCmd(io),
 		newBookCmd(io),
-		newNowCmd(io),
 	)
 
 	cmd.SetHelpTemplate(`{{with .Long}}{{. | trimTrailingWhitespaces}}{{else}}{{.Short}}{{end}}

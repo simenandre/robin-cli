@@ -7,7 +7,7 @@ with your normal Robin email/password using the same `/auth/users`
 endpoint the web dashboard uses internally.
 
 ```sh
-$ robin now
+$ robin book
 ✓ booked Meeting Room 5 — Wed Apr 29 12:00 to 13:00 (1h0m0s)
 ```
 
@@ -24,7 +24,8 @@ Requires Go 1.26+.
 ```sh
 robin init     # save org slug, email, password
 robin login    # exchange them for a cached access token
-robin now      # book the best priority room right now
+robin book     # book the best priority room right now
+               # (also available as 'robin now')
 ```
 
 Credentials and the access token live under your OS config directory
@@ -34,17 +35,15 @@ mode `0600`. See [Config](#config) below to enable `robin now`.
 ## Commands
 
 ```
-robin init                       save credentials to a config file
-robin login                      authenticate, cache an access token
-robin logout                     forget the cached token
-robin whoami                     print the current user
+robin init                          save credentials to a config file
+robin login / logout                manage the cached access token
+robin whoami                        print the current user
 
-robin orgs                       list organizations
-robin locations                  list locations across orgs
-robin spaces [-l LOCATION]       list bookable spaces
+robin orgs                          list organizations
+robin locations                     list locations across orgs
+robin spaces [-l LOCATION]          list bookable spaces
 
-robin now [--when WHEN]          book the best priority room
-robin book --space ID --start T  book a specific space
+robin book                          book a meeting room (alias: robin now)
 ```
 
 Every list command supports `--json` for machine-readable output. Every
@@ -52,42 +51,76 @@ command supports `-v` / `--verbose`, `-q` / `--quiet`, `--no-color`,
 `--no-input`, `--help`. Run `robin help <command>` for the full surface
 of any subcommand.
 
-### `robin now` — quick book
+### `robin book` — book a meeting room
 
-Looks up `quick_book.priority` in your config, finds the room with the
-**longest free slot** (capped at `max_duration_minutes`), and books it.
-Falls back to other meeting rooms if no priority room is available.
+One command, two modes. Mode is picked by whether `--space` is set.
+
+**Auto-pick** (no `--space`) — finds the best room based on your
+`quick_book` config. Falls back to other meeting rooms if every priority
+room is busy.
 
 ```sh
-robin now                       # book now (or up to 30 min from now)
-robin now --dry-run             # see the pick without booking
-
-# strict forms
-robin now --when 1h             # 1 hour from now
-robin now --when 14:00          # 14:00 today
-robin now --when "2026-04-30 09:00"
-
-# natural language (any of these work)
-robin now --when tomorrow
-robin now --when "tomorrow 9am"
-robin now --when "in 2 hours"
-robin now --when "monday 9am"          # upcoming Monday
-robin now --when "next monday at 14:00"
-
-robin now --max 60              # cap booking length at 60 min
-robin now --prioritize-length   # ignore priority, take longest slot anywhere
+robin book                                # best room, starting now
+robin book --start "tomorrow 9am"         # best room tomorrow at 9
+robin book --start "in 2 hours"           # best room 2 hours from now
+robin book --start now --duration 1h      # exactly 1h, starting now
+robin book --max 60                       # cap booking length at 60 min
+robin book --prioritize-length            # take longest slot anywhere
+robin book --dry-run                      # see the pick without booking
 ```
 
-`--when` accepts (in order of precedence):
+`robin now` is a Cobra alias of `robin book` — same command, more
+memorable for the daily-driver case.
 
-1. `now` (or empty) — current time
+**Specific** (`--space ID`) — books that exact room. Requires `--start`
+plus either `--duration` or `--end`. Confirms before posting unless
+`--yes`.
+
+```sh
+robin book --space 172344 --start "tomorrow 9am" --duration 30m
+robin book --space 172344 --start "14:00" --duration 1h --yes
+robin book --space 172344 \
+           --start "2026-04-29T14:00:00+02:00" \
+           --end   "2026-04-29T15:00:00+02:00" --title "Sync"
+```
+
+#### Time inputs
+
+`--start`, `--end`, and `--duration` resolve in this order:
+
+1. `now` or empty → current time
 2. Go duration: `1h`, `30m`, `2h30m`
 3. Clock time today: `14:00`, `09:30`
-4. Strict datetime: `2026-04-29 09:00`, `2026-04-29T09:00`, RFC3339
-5. **Natural language** (English, future-direction): `tomorrow`,
-   `tomorrow 9am`, `in 2 hours`, `monday 9am`, `next friday`, `9am`,
-   `yesterday`. Powered by [`go-naturaldate`](https://github.com/tj/go-naturaldate);
-   if a phrase is ambiguous prefer the explicit `2026-04-30 14:00` form.
+4. Strict datetime: `2026-04-29 09:00`, RFC3339
+5. **Natural language** (future-direction): `tomorrow`, `tomorrow 9am`,
+   `in 2 hours`, `monday 9am`, `next friday`, `9am`, `yesterday`.
+   Powered by [`go-naturaldate`](https://github.com/tj/go-naturaldate);
+   for ambiguous phrases use the explicit `2026-04-30 14:00` form.
+
+#### Auto-pick algorithm
+
+`--start` is the **earliest acceptable start**. The picker queries each
+configured room (priority list first, then fallback meeting rooms), looks
+for a free slot starting in `[--start, --start + window]` of at least
+`--min` minutes. Among rooms with availability, the **longest slot**
+wins (capped at `--max`); priority order breaks ties. With
+`--prioritize-length`, all rooms compete equally on length and priority
+is only a tiebreaker.
+
+If `--duration` is set in auto-pick mode, the picker locks to that exact
+length instead of maximizing.
+
+#### Specific-mode flags
+
+| flag | meaning |
+|---|---|
+| `--space`, `-s` | space ID to book |
+| `--start` | exact start (required) |
+| `--duration`, `-d` | event length (mutually exclusive with `--end`) |
+| `--end` | exact end |
+| `--yes`, `-y` | skip confirmation |
+| `--title`, `--description` | event metadata |
+| `--time-zone` | IANA timezone (default: from config, else `Europe/Oslo`) |
 
 | flag | meaning |
 |---|---|
@@ -98,18 +131,6 @@ robin now --prioritize-length   # ignore priority, take longest slot anywhere
 | `--prioritize-length`, `-L` | Rank all rooms by length, ignoring priority order. |
 | `-n`, `--dry-run` | Find the best room and print it; don't book. |
 | `--title` | Event title (otherwise Robin auto-generates one). |
-
-### `robin book` — book a specific space
-
-```sh
-robin book --space 172344 --start "2026-04-29 14:00" --duration 30m
-robin book --space 172344 --start "14:00" --duration 1h --yes
-robin book --space 172344 --start "2026-04-29T14:00:00+02:00" \
-           --end   "2026-04-29T15:00:00+02:00" --title "Sync"
-```
-
-Robin requires events to be at least 5 minutes long. Times accept RFC3339
-or local forms. Without `--yes`, prompts before posting.
 
 ## Config
 
