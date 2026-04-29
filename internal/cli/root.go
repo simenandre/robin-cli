@@ -1,0 +1,128 @@
+package cli
+
+import (
+	"github.com/spf13/cobra"
+)
+
+// Version is set at build time via -ldflags "-X .../cli.Version=..."
+var Version = "dev"
+
+const (
+	repoURL = "https://github.com/simenandre/robin-user-api"
+	docsURL = "https://github.com/simenandre/robin-user-api#readme"
+)
+
+func NewRootCmd(io *IO) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "robin",
+		Short: "Book Robin meeting rooms from your terminal.",
+		Long: `robin — book Robin meeting rooms from your terminal.
+
+Authenticates with the Robin dashboard's email/password endpoint, so it
+works without an admin-issued API token. Stores credentials and the cached
+access token under your OS config directory.`,
+		Example: `  # one-time setup
+  robin init
+  robin login
+
+  # find and book the best priority room right now
+  robin now
+
+  # see what would be booked, but don't book
+  robin now --dry-run
+
+  # book starting in one hour
+  robin now --when 1h
+
+  # list all bookable spaces in your location
+  robin spaces`,
+		Version:           Version,
+		SilenceUsage:      true,
+		SilenceErrors:     true,
+		DisableAutoGenTag: true,
+	}
+	cmd.SetVersionTemplate("robin {{.Version}}\n")
+
+	cmd.PersistentFlags().BoolVar(&io.JSON, "json", false, "output as JSON")
+	cmd.PersistentFlags().BoolVarP(&io.Quiet, "quiet", "q", false, "suppress non-essential output")
+	cmd.PersistentFlags().BoolVarP(&io.Verbose, "verbose", "v", false, "show extra detail (HTTP exchange, per-room availability)")
+	cmd.PersistentFlags().BoolVar(&io.NoColor, "no-color", false, "disable color output")
+	cmd.PersistentFlags().BoolVar(&io.NoInput, "no-input", false, "fail rather than prompt for input")
+
+	cmd.AddCommand(
+		newInitCmd(io),
+		newLoginCmd(io),
+		newLogoutCmd(io),
+		newWhoamiCmd(io),
+		newOrgsCmd(io),
+		newLocationsCmd(io),
+		newSpacesCmd(io),
+		newBookCmd(io),
+		newNowCmd(io),
+	)
+
+	cmd.SetHelpTemplate(`{{with .Long}}{{. | trimTrailingWhitespaces}}{{else}}{{.Short}}{{end}}
+
+Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
+
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+
+Commands:{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
+
+Global flags:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}
+
+Learn more at ` + docsURL + `
+Report issues at ` + repoURL + `/issues
+`)
+
+	cobra.OnInitialize(func() { io.applyFlags() })
+	return cmd
+}
+
+// Execute runs the CLI with the given args. Returns the exit code.
+func Execute() int {
+	io := NewIO()
+	root := NewRootCmd(io)
+	if err := root.Execute(); err != nil {
+		io.Errorf("%s", err)
+		hintForError(io, err)
+		return 1
+	}
+	return 0
+}
+
+// hintForError adds a recovery suggestion based on what we know about the
+// error. clig.dev: errors should guide users toward a fix.
+func hintForError(io *IO, err error) {
+	msg := err.Error()
+	switch {
+	case contains(msg, "401"), contains(msg, "expired"):
+		io.Status("hint: run %s to refresh your access token.", boldCmd("robin login"))
+	case contains(msg, "no session"), contains(msg, "not authenticated"):
+		io.Status("hint: run %s to authenticate.", boldCmd("robin login"))
+	case contains(msg, "no config"), contains(msg, "missing org"):
+		io.Status("hint: run %s to save your credentials.", boldCmd("robin init"))
+	case contains(msg, "quick_book"):
+		io.Status("hint: see %s for required quick_book fields.", boldCmd("robin now --help"))
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

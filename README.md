@@ -1,10 +1,15 @@
 # robin
 
-CLI to book [Robin](https://robinpowered.com) meeting rooms from your terminal.
+Book [Robin](https://robinpowered.com) meeting rooms from your terminal.
 
 Designed for users who don't have admin-issued API tokens. Authenticates
-with your normal Robin email/password and uses the same `/auth/users`
+with your normal Robin email/password using the same `/auth/users`
 endpoint the web dashboard uses internally.
+
+```sh
+$ robin now
+✓ booked Meeting Room 5 — Wed Apr 29 12:00 to 13:00 (1h0m0s)
+```
 
 ## Install
 
@@ -14,67 +19,77 @@ go install github.com/simenandre/robin-user-api/cmd/robin@latest
 
 Requires Go 1.26+.
 
-## Setup
+## Quick start
 
 ```sh
-robin init    # prompts for org slug, email, password
-robin login   # exchanges credentials for an access token
-robin whoami  # prints the current user (sanity check)
+robin init     # save org slug, email, password
+robin login    # exchange them for a cached access token
+robin now      # book the best priority room right now
 ```
 
-Credentials and the access token are stored under `os.UserConfigDir()`
-(macOS: `~/Library/Application Support/robin/`, Linux: `~/.config/robin/`),
-mode `0600`.
+Credentials and the access token live under your OS config directory
+(macOS `~/Library/Application Support/robin/`, Linux `~/.config/robin/`),
+mode `0600`. See [Config](#config) below to enable `robin now`.
 
 ## Commands
 
 ```
-robin orgs                           list organizations
-robin locations                      list locations in your org
-robin spaces [--location ID]         list bookable spaces
-robin book --space ID --start TIME   book a specific space
-           [--end TIME | --duration 30m]
-           [--title "..."] [--time-zone Europe/Oslo]
-           [--yes]
-robin now [--when WHEN] [--min N] [--max N] [--window N]
-          [--prioritize-length] [--dry-run]
+robin init                       save credentials to a config file
+robin login                      authenticate, cache an access token
+robin logout                     forget the cached token
+robin whoami                     print the current user
+
+robin orgs                       list organizations
+robin locations                  list locations across orgs
+robin spaces [-l LOCATION]       list bookable spaces
+
+robin now [--when WHEN]          book the best priority room
+robin book --space ID --start T  book a specific space
 ```
 
-`-v` / `--verbose` (after the subcommand) dumps the HTTP exchange to stderr.
+Every list command supports `--json` for machine-readable output. Every
+command supports `-v` / `--verbose`, `-q` / `--quiet`, `--no-color`,
+`--no-input`, `--help`. Run `robin help <command>` for the full surface
+of any subcommand.
 
-### `robin now` — quick book a meeting room
+### `robin now` — quick book
 
-Books the best meeting room based on your priority list and current
-availability. By default it:
+Looks up `quick_book.priority` in your config, finds the room with the
+**longest free slot** (capped at `max_duration_minutes`), and books it.
+Falls back to other meeting rooms if no priority room is available.
 
-1. Checks each room in your priority list for availability.
-2. Picks the one with the **longest free slot**, capped at
-   `max_duration_minutes` (default 2h). Priority order breaks ties.
-3. Falls back to other meeting rooms in the location if no priority
-   room is available.
-
-Flags:
+```sh
+robin now                    # book now (or up to 30 min from now)
+robin now --dry-run          # see the pick without booking
+robin now --when 1h          # search starting 1 hour from now
+robin now --when 14:00       # search starting at 14:00 today
+robin now --when "2026-04-30 09:00"
+robin now --max 60           # cap booking length at 60 min
+robin now --prioritize-length
+                             # take longest slot anywhere; priority only tiebreaks
+```
 
 | flag | meaning |
 |---|---|
-| `--when` | Start search from a different time. Accepts a duration (`1h`, `30m`, `2h30m`), a clock time today (`14:00`), or a full datetime (`2026-04-29 09:00`, RFC3339). Default: now. |
-| `--min N` | Minimum acceptable slot length in minutes. Skips rooms below this. |
-| `--max N` | Maximum slot length in minutes. Caps the booking duration. |
-| `--window N` | How many minutes after `--when` to search for an open slot. |
-| `--prioritize-length` | Rank all meeting rooms by available length, ignoring priority order. Priority is then only a tiebreaker. |
-| `--dry-run` | Find the best room and print it; don't book. |
+| `--when` | Search anchor. Duration (`1h`, `30m`), today's clock time (`14:00`), or full datetime. Default: now. |
+| `--min N` | Minimum acceptable slot length (minutes). |
+| `--max N` | Cap on booking length (minutes). |
+| `--window N` | How far past the anchor a slot may start (minutes). |
+| `--prioritize-length`, `-L` | Rank all rooms by length, ignoring priority order. |
+| `-n`, `--dry-run` | Find the best room and print it; don't book. |
 | `--title` | Event title (otherwise Robin auto-generates one). |
 
-Examples:
+### `robin book` — book a specific space
 
 ```sh
-robin now                    # book best priority room starting now
-robin now --when 1h          # book starting one hour from now
-robin now --when 14:00       # book starting at 14:00 today
-robin now --when "2026-04-29 09:00"
-robin now --prioritize-length --max 60   # longest room ≤ 60 min
-robin now --dry-run          # see what would be booked
+robin book --space 172344 --start "2026-04-29 14:00" --duration 30m
+robin book --space 172344 --start "14:00" --duration 1h --yes
+robin book --space 172344 --start "2026-04-29T14:00:00+02:00" \
+           --end   "2026-04-29T15:00:00+02:00" --title "Sync"
 ```
+
+Robin requires events to be at least 5 minutes long. Times accept RFC3339
+or local forms. Without `--yes`, prompts before posting.
 
 ## Config
 
@@ -99,13 +114,37 @@ robin now --dry-run          # see what would be booked
 
 | field | meaning |
 |---|---|
-| `location` | The location ID to search in (`robin locations` shows yours). |
-| `priority` | Room numbers in preference order. The matcher looks for `Meeting Room N` in the space name. |
-| `min_duration_minutes` | Minimum slot length to consider a room usable. |
+| `location` | Location ID to search in (`robin locations` shows yours). |
+| `priority` | Room numbers in preference order. The matcher looks for `Meeting Room N` in space names. |
+| `min_duration_minutes` | Skip rooms with less free time than this. |
 | `max_duration_minutes` | Cap on booking length. |
-| `window_minutes` | How long after the search anchor (`--when` or now) a slot may start. |
-| `time_zone` | IANA timezone used when sending start/end to Robin. |
+| `window_minutes` | How far past the search anchor a slot may start. |
+| `time_zone` | IANA timezone used for booking start/end. |
 | `title` | Optional default event title. |
+
+## Output, color, and scripts
+
+`robin` follows the [Command Line Interface Guidelines](https://clig.dev):
+
+- **Human output by default**, formatted tables, color sparingly (errors
+  red, success green). Auto-disables when not connected to a terminal,
+  or when `NO_COLOR` is set, or with `--no-color`.
+- **`--json`** on every command that prints data. Pipe-friendly and
+  stable for scripts.
+- **`--quiet`** suppresses non-essential output; exit code is the source
+  of truth for success.
+- **`--verbose`** shows the HTTP exchange and per-room availability.
+- **`--no-input`** fails rather than prompting. Combine with `--yes` for
+  CI / scripts that need `robin book`.
+- **stdout** for results, **stderr** for status, progress, and errors.
+
+Shell completion:
+
+```sh
+robin completion bash > /etc/bash_completion.d/robin
+robin completion zsh  > "${fpath[1]}/_robin"
+robin completion fish > ~/.config/fish/completions/robin.fish
+```
 
 ## How auth works
 
@@ -118,4 +157,5 @@ access tokens. This tool instead replays the dashboard's own login flow:
 2. The response yields `{access_token, expire_at, account_id}`.
 3. Subsequent calls use `Authorization: Access-Token <token>`.
 
-The token is cached in `session.json` next to the config file.
+The token is cached in `session.json` next to the config file. When it
+expires, you'll see a 401 and a hint to run `robin login` again.
