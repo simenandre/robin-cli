@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -286,13 +287,48 @@ type Event struct {
 // Confirmation reports whether an event has been checked in. Robin returns
 // the field as null for unconfirmed events.
 type Confirmation struct {
-	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
-	UserID      int64      `json:"user_id,omitempty"`
+	ConfirmedAt *FlexTime `json:"confirmed_at,omitempty"`
+	UserID      int64     `json:"user_id,omitempty"`
 }
 
 // IsConfirmed reports whether someone has already checked into the event.
 func (e Event) IsConfirmed() bool {
 	return e.Confirmation != nil && e.Confirmation.ConfirmedAt != nil && !e.Confirmation.ConfirmedAt.IsZero()
+}
+
+// FlexTime tolerates the RFC3339 variants Robin emits — notably the
+// "+0000" / "-0700" no-colon offset form, which Go's default time.Time
+// UnmarshalJSON rejects. Used for any timestamp decoded from Robin's API.
+type FlexTime struct {
+	time.Time
+}
+
+var flexTimeLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05.000-0700",
+	"2006-01-02T15:04:05-0700",
+}
+
+func (ft *FlexTime) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		return nil
+	}
+	var lastErr error
+	for _, layout := range flexTimeLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			ft.Time = t
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("FlexTime: cannot parse %q: %w", s, lastErr)
+}
+
+func (ft FlexTime) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ft.Time.Format(time.RFC3339Nano))
 }
 
 func (c *Client) BookSpace(spaceID int64, req BookRequest) (*Event, error) {
