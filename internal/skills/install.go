@@ -10,16 +10,14 @@ import (
 // SkillDirName is the per-tool subdirectory the SKILL.md is written into.
 const SkillDirName = "robin-cli"
 
-// InstallTo writes SKILL.md for the given agent at the requested scope.
-// projectRoot is used when scope is "project"; for "user" the file goes
-// under the user's home directory. Returns an error when the destination
-// already exists and force is false.
-func InstallTo(out io.Writer, agentSlug, scope, projectRoot string, force bool) error {
+// InstallTo writes SKILL.md into the user's per-agent skill directory.
+// Returns an error when the destination already exists and force is false.
+func InstallTo(out io.Writer, agentSlug string, force bool) error {
 	agent, err := lookupAgent(agentSlug)
 	if err != nil {
 		return err
 	}
-	skillDir, err := resolveSkillDir(agent, scope, projectRoot)
+	skillDir, err := resolveSkillDir(agent)
 	if err != nil {
 		return err
 	}
@@ -38,15 +36,15 @@ func InstallTo(out io.Writer, agentSlug, scope, projectRoot string, force bool) 
 	return nil
 }
 
-// UninstallFrom removes SKILL.md for the given agent at the given scope.
-// Returns nil when the file is already absent. The parent skill directory
-// is removed when it ends up empty.
-func UninstallFrom(out io.Writer, agentSlug, scope, projectRoot string) error {
+// UninstallFrom removes SKILL.md from the user's per-agent skill directory.
+// Returns nil when the file is already absent. The parent skill directory is
+// removed when it ends up empty.
+func UninstallFrom(out io.Writer, agentSlug string) error {
 	agent, err := lookupAgent(agentSlug)
 	if err != nil {
 		return err
 	}
-	skillDir, err := resolveSkillDir(agent, scope, projectRoot)
+	skillDir, err := resolveSkillDir(agent)
 	if err != nil {
 		return err
 	}
@@ -63,40 +61,26 @@ func UninstallFrom(out io.Writer, agentSlug, scope, projectRoot string) error {
 }
 
 // ResolveSkillFile returns the path SKILL.md would be written to for the
-// given agent at the given scope. Used by `robin skills list` so callers can
-// show where the file lives without reading its contents.
-func ResolveSkillFile(agentSlug, scope, projectRoot string) (string, error) {
+// given agent. Used by `robin skills list` so callers can show where the file
+// lives without reading its contents.
+func ResolveSkillFile(agentSlug string) (string, error) {
 	agent, err := lookupAgent(agentSlug)
 	if err != nil {
 		return "", err
 	}
-	dir, err := resolveSkillDir(agent, scope, projectRoot)
+	dir, err := resolveSkillDir(agent)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "SKILL.md"), nil
 }
 
-func resolveSkillDir(agent Agent, scope, projectRoot string) (string, error) {
-	switch scope {
-	case "project":
-		root := projectRoot
-		if root == "" {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return "", fmt.Errorf("resolve working directory: %w", err)
-			}
-			root = cwd
-		}
-		return filepath.Join(root, agent.ProjectDir, SkillDirName), nil
-	case "user":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home directory: %w", err)
-		}
-		return filepath.Join(home, agent.UserDir, SkillDirName), nil
+func resolveSkillDir(agent Agent) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return "", fmt.Errorf("invalid scope %q (want project or user)", scope)
+	return filepath.Join(home, agent.Dir, SkillDirName), nil
 }
 
 func lookupAgent(slug string) (Agent, error) {
