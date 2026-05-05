@@ -7,7 +7,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/charmbracelet/huh"
 	"github.com/simenandre/robin-cli/internal/config"
+	"github.com/simenandre/robin-cli/internal/robin"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -21,7 +23,10 @@ func newInitCmd(io *IO) *cobra.Command {
   ` + configFilePath() + `
 
 The file is created with mode 0600. Credentials are stored in plaintext;
-this is the trade-off for accessing Robin without an admin API token.`,
+this is the trade-off for accessing Robin without an admin API token.
+
+After saving credentials, init offers to set up quick_book (default
+location, priority rooms, time zone, durations) in the same flow.`,
 		Example: `  robin init`,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -47,12 +52,47 @@ this is the trade-off for accessing Robin without an admin API token.`,
 			if err != nil {
 				return err
 			}
-			c := &config.Config{Org: org, Email: email, Password: string(pw)}
-			if err := config.Save(c); err != nil {
+			cfg := &config.Config{Org: org, Email: email, Password: string(pw)}
+			if err := config.Save(cfg); err != nil {
 				return err
 			}
 			io.Success("saved %s", configFilePath())
-			io.Status("next: run %s", boldCmd("robin login"))
+
+			setUp := false
+			if err := huh.NewConfirm().
+				Title("Set up quick_book now?").
+				Description("Pick default location, priority rooms, time zone, and durations.").
+				Affirmative("Yes").
+				Negative("Skip").
+				Value(&setUp).
+				Run(); err != nil {
+				return fmt.Errorf("init: %w", err)
+			}
+			if !setUp {
+				io.Status("next: run %s, then %s", boldCmd("robin login"), boldCmd("robin priority"))
+				return nil
+			}
+
+			io.Status("logging in to discover orgs / locations / spaces...")
+			c := robin.New()
+			c.Verbose = io.Verbose
+			sess, err := c.Login(cfg.Email, cfg.Password, nil)
+			if err != nil {
+				return fmt.Errorf("login (so we can list spaces): %w", err)
+			}
+			if err := robin.SaveSession(sess); err != nil {
+				return err
+			}
+
+			qb, err := runQuickBookSetup(c, cfg.QuickBook)
+			if err != nil {
+				return err
+			}
+			cfg.QuickBook = qb
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			io.Success("quick_book saved (%d priority rooms, location %d)", len(qb.Priority), qb.Location)
 			return nil
 		},
 	}
