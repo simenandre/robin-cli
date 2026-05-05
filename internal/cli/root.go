@@ -63,6 +63,7 @@ access token under your OS config directory.`,
 		newLocationsCmd(io),
 		newSpacesCmd(io),
 		newBookCmd(io),
+		newSkillsCmd(io),
 	)
 
 	cmd.SetHelpTemplate(`{{with .Long}}{{. | trimTrailingWhitespaces}}{{else}}{{.Short}}{{end}}
