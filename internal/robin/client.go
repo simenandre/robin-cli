@@ -275,10 +275,24 @@ type BookRequest struct {
 }
 
 type Event struct {
-	ID    string   `json:"id"`
-	Title string   `json:"title"`
-	Start DateTime `json:"start"`
-	End   DateTime `json:"end"`
+	ID           string        `json:"id"`
+	Title        string        `json:"title"`
+	Start        DateTime      `json:"start"`
+	End          DateTime      `json:"end"`
+	SpaceID      int64         `json:"space_id,omitempty"`
+	Confirmation *Confirmation `json:"confirmation,omitempty"`
+}
+
+// Confirmation reports whether an event has been checked in. Robin returns
+// the field as null for unconfirmed events.
+type Confirmation struct {
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
+	UserID      int64      `json:"user_id,omitempty"`
+}
+
+// IsConfirmed reports whether someone has already checked into the event.
+func (e Event) IsConfirmed() bool {
+	return e.Confirmation != nil && e.Confirmation.ConfirmedAt != nil && !e.Confirmation.ConfirmedAt.IsZero()
 }
 
 func (c *Client) BookSpace(spaceID int64, req BookRequest) (*Event, error) {
@@ -299,6 +313,26 @@ func (c *Client) SpaceEvents(spaceID int64, after, before time.Time) ([]Event, e
 		return nil, err
 	}
 	return events, nil
+}
+
+// MyEvents returns events the current user is part of in [after, before].
+func (c *Client) MyEvents(after, before time.Time) ([]Event, error) {
+	q := url.Values{}
+	q.Set("after", after.UTC().Format(time.RFC3339))
+	q.Set("before", before.UTC().Format(time.RFC3339))
+	q.Set("per_page", "100")
+	var events []Event
+	if err := c.Get("/me/events?"+q.Encode(), &events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// ConfirmEvent marks an event as checked-in. Robin's check-in window is
+// server-side: this can return 4xx for events that are too early, too late,
+// or already confirmed.
+func (c *Client) ConfirmEvent(eventID string) error {
+	return c.Post(fmt.Sprintf("/events/%s/confirmation", eventID), nil, nil)
 }
 
 func truncate(s string, n int) string {
