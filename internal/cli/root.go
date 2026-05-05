@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"github.com/simenandre/robin-cli/internal/config"
+	"github.com/simenandre/robin-cli/internal/robin"
 	"github.com/spf13/cobra"
 )
 
@@ -95,13 +97,49 @@ Report issues at ` + repoURL + `/issues
 // Execute runs the CLI with the given args. Returns the exit code.
 func Execute() int {
 	io := NewIO()
-	root := NewRootCmd(io)
-	if err := root.Execute(); err != nil {
-		io.Errorf("%s", err)
-		hintForError(io, err)
-		return 1
+	err := NewRootCmd(io).Execute()
+	if err == nil {
+		return 0
 	}
-	return 0
+	if isSessionError(err) {
+		if relogErr := tryRelogin(io); relogErr == nil {
+			if err2 := NewRootCmd(io).Execute(); err2 == nil {
+				return 0
+			} else {
+				err = err2
+			}
+		}
+	}
+	io.Errorf("%s", err)
+	hintForError(io, err)
+	return 1
+}
+
+// tryRelogin reads stored credentials and refreshes the cached session.
+func tryRelogin(io *IO) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	c := robin.New()
+	c.Verbose = io.Verbose
+	sess, err := c.Login(cfg.Email, cfg.Password, nil)
+	if err != nil {
+		return err
+	}
+	if err := robin.SaveSession(sess); err != nil {
+		return err
+	}
+	io.Status("session refreshed")
+	return nil
+}
+
+func isSessionError(err error) bool {
+	msg := err.Error()
+	return contains(msg, "401") ||
+		contains(msg, "expired") ||
+		contains(msg, "no session") ||
+		contains(msg, "not authenticated")
 }
 
 // hintForError adds a recovery suggestion based on what we know about the
@@ -109,12 +147,11 @@ func Execute() int {
 func hintForError(io *IO, err error) {
 	msg := err.Error()
 	switch {
-	case contains(msg, "401"), contains(msg, "expired"):
-		io.Status("hint: run %s to refresh your access token.", boldCmd("robin login"))
-	case contains(msg, "no session"), contains(msg, "not authenticated"):
-		io.Status("hint: run %s to authenticate.", boldCmd("robin login"))
 	case contains(msg, "no config"), contains(msg, "missing org"):
 		io.Status("hint: run %s to save your credentials.", boldCmd("robin init"))
+	case contains(msg, "401"), contains(msg, "expired"),
+		contains(msg, "no session"), contains(msg, "not authenticated"):
+		io.Status("hint: run %s to authenticate.", boldCmd("robin login"))
 	case contains(msg, "quick_book"):
 		io.Status("hint: see %s for required quick_book fields.", boldCmd("robin now --help"))
 	}
