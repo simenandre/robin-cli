@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type Config struct {
@@ -16,13 +19,70 @@ type Config struct {
 }
 
 type QuickBookConfig struct {
-	Location           int64  `json:"location"`
-	Priority           []int  `json:"priority"`
-	MinDurationMinutes int    `json:"min_duration_minutes"`
-	MaxDurationMinutes int    `json:"max_duration_minutes"`
-	WindowMinutes      int    `json:"window_minutes"`
-	TimeZone           string `json:"time_zone"`
-	Title              string `json:"title,omitempty"`
+	Location           int64         `json:"location"`
+	Priority           []int         `json:"priority"`
+	MinDurationMinutes int           `json:"min_duration_minutes"`
+	MaxDurationMinutes int           `json:"max_duration_minutes"`
+	WindowMinutes      int           `json:"window_minutes"`
+	TimeZone           string        `json:"time_zone"`
+	Title              string        `json:"title,omitempty"`
+	WorkingHours       *WorkingHours `json:"working_hours,omitempty"`
+}
+
+// WorkingHours bound the workday — auto-pick uses these to snap a --start
+// that lands before Start up to Start on the same day, so 'robin book
+// --start tomorrow' (which resolves to tomorrow 00:00) finds a slot inside
+// office hours.
+type WorkingHours struct {
+	Start string `json:"start"` // "HH:MM"
+	End   string `json:"end"`   // "HH:MM"
+}
+
+// Snap returns t bumped up to the start of working hours when it falls on
+// the same day before Start. t at-or-after Start is returned unchanged —
+// auto-pick handles the past-End case naturally by not finding any rooms.
+func (w *WorkingHours) Snap(t time.Time) (time.Time, error) {
+	if w == nil || w.Start == "" || w.End == "" {
+		return t, nil
+	}
+	sh, sm, err := ParseClockTime(w.Start)
+	if err != nil {
+		return t, fmt.Errorf("working_hours.start: %w", err)
+	}
+	eh, em, err := ParseClockTime(w.End)
+	if err != nil {
+		return t, fmt.Errorf("working_hours.end: %w", err)
+	}
+	y, m, d := t.Date()
+	loc := t.Location()
+	start := time.Date(y, m, d, sh, sm, 0, 0, loc)
+	end := time.Date(y, m, d, eh, em, 0, 0, loc)
+	if !end.After(start) {
+		return t, fmt.Errorf("working_hours: end (%s) must be after start (%s)", w.End, w.Start)
+	}
+	if t.Before(start) {
+		return start, nil
+	}
+	return t, nil
+}
+
+// ParseClockTime parses "HH:MM" → (h, m). Exposed so the interactive picker
+// can validate input as the user types.
+func ParseClockTime(s string) (int, int, error) {
+	s = strings.TrimSpace(s)
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("expected HH:MM, got %q", s)
+	}
+	h, err1 := strconv.Atoi(parts[0])
+	m, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0, fmt.Errorf("invalid HH:MM %q", s)
+	}
+	if h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, 0, fmt.Errorf("HH:MM out of range %q", s)
+	}
+	return h, m, nil
 }
 
 func Dir() (string, error) {

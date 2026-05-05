@@ -51,6 +51,7 @@ Two modes, picked by whether you supply --space:
 ("14:00"), and full datetimes ("2026-04-29 09:00", RFC3339).`,
 		Example: `  # auto-pick (the common case — also available as 'robin now')
   robin book                                # best room, starting now
+  robin book --when "tomorrow 9am"          # --when is an alias for --start
   robin book --start "tomorrow 9am"         # best room tomorrow at 9
   robin book --start now --duration 1h      # exactly 1h, starting now
   robin book --dry-run                      # see the pick without booking
@@ -59,7 +60,7 @@ Two modes, picked by whether you supply --space:
 
   # specific space
   robin book --space 172344 --start "tomorrow 9am" --duration 30m
-  robin book --space 172344 --start "14:00" --duration 1h --yes`,
+  robin book --space 172344 --when "14:00" --duration 1h --yes`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tz, tzNameResolved, err := resolveTZ(tzName)
@@ -90,6 +91,7 @@ Two modes, picked by whether you supply --space:
 
 	// When / how long
 	cmd.Flags().StringVar(&startStr, "start", "", "start time (auto-pick: earliest start; specific: exact). Default: now")
+	cmd.Flags().StringVar(&startStr, "when", "", "alias for --start")
 	cmd.Flags().StringVar(&endStr, "end", "", "end time (specific mode only)")
 	cmd.Flags().StringVarP(&durationStr, "duration", "d", "", "fixed length, e.g. 30m / 1h. Required for --space")
 
@@ -279,6 +281,16 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 	}
 	if from.Second() != 0 || from.Nanosecond() != 0 {
 		from = from.Truncate(time.Minute).Add(time.Minute)
+	}
+	if qb.WorkingHours != nil {
+		snapped, err := qb.WorkingHours.Snap(from)
+		if err != nil {
+			return err
+		}
+		if !snapped.Equal(from) {
+			io.Status("snapped --start to working hours: %s", snapped.Format("Mon Jan 2 15:04"))
+			from = snapped
+		}
 	}
 	latestStart := from.Add(window)
 	queryEnd := latestStart.Add(maxDur)

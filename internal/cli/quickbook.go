@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/simenandre/robin-cli/internal/config"
@@ -67,6 +68,12 @@ func runQuickBookSetup(c *robin.Client, current *config.QuickBookConfig) (*confi
 	out.MinDurationMinutes = min
 	out.MaxDurationMinutes = max
 	out.WindowMinutes = window
+
+	wh, err := pickWorkingHours(out.WorkingHours)
+	if err != nil {
+		return nil, err
+	}
+	out.WorkingHours = wh
 
 	title, err := pickTitle(out.Title)
 	if err != nil {
@@ -360,6 +367,75 @@ func coalesceDefault(v, def int) int {
 		return def
 	}
 	return v
+}
+
+func pickWorkingHours(current *config.WorkingHours) (*config.WorkingHours, error) {
+	startStr := "09:00"
+	endStr := "17:00"
+	defaultEnable := false
+	if current != nil {
+		if current.Start != "" {
+			startStr = current.Start
+		}
+		if current.End != "" {
+			endStr = current.End
+		}
+		defaultEnable = true
+	}
+
+	enable := defaultEnable
+	title := "Set working hours?"
+	if defaultEnable {
+		title = fmt.Sprintf("Update working hours? (currently %s–%s)", current.Start, current.End)
+	}
+	if err := huh.NewConfirm().
+		Title(title).
+		Description("Auto-pick snaps a --start that lands before working hours up to the start of the workday — so 'robin book --start tomorrow' lands at the workday start.").
+		Affirmative("Yes").
+		Negative("Skip").
+		Value(&enable).
+		Run(); err != nil {
+		return current, fmt.Errorf("quick_book: %w", err)
+	}
+	if !enable {
+		if defaultEnable {
+			return current, nil
+		}
+		return nil, nil
+	}
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Working hours start (HH:MM)").
+				Value(&startStr).
+				Validate(validateClockTime),
+			huh.NewInput().
+				Title("Working hours end (HH:MM)").
+				Value(&endStr).
+				Validate(validateClockTime),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return current, fmt.Errorf("quick_book: %w", err)
+	}
+	startStr = strings.TrimSpace(startStr)
+	endStr = strings.TrimSpace(endStr)
+	wh := &config.WorkingHours{Start: startStr, End: endStr}
+	// Sanity-check the pair through Snap on a synthetic time.
+	if _, err := wh.Snap(time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)); err != nil {
+		return current, err
+	}
+	return wh, nil
+}
+
+func validateClockTime(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fmt.Errorf("required")
+	}
+	_, _, err := config.ParseClockTime(s)
+	return err
 }
 
 func pickTitle(current string) (string, error) {
