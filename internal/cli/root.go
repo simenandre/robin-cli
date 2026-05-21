@@ -64,6 +64,7 @@ access token under your OS config directory.`,
 		newSpacesCmd(io),
 		newBookCmd(io),
 		newCheckInCmd(io),
+		newCancelCmd(io),
 		newConfigCmd(io),
 		newSkillsCmd(io),
 	)

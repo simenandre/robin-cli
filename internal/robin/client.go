@@ -371,6 +371,12 @@ func (c *Client) ConfirmEvent(eventID string) error {
 	return c.Post(fmt.Sprintf("/events/%s/confirmation", eventID), nil, nil)
 }
 
+// DeleteEvent cancels an event. Robin returns 204 on success, 404 if the
+// event doesn't exist, or 403 if the caller isn't allowed to delete it.
+func (c *Client) DeleteEvent(eventID string) error {
+	return c.do(http.MethodDelete, fmt.Sprintf("/events/%s", eventID), nil, nil)
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
