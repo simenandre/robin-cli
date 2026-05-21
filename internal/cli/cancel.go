@@ -11,22 +11,27 @@ import (
 
 func newCancelCmd(io *IO) *cobra.Command {
 	var (
-		eventID string
-		all     bool
-		window  time.Duration
-		yes     bool
-		dryRun  bool
+		eventID  string
+		all      bool
+		multiple bool
+		window   time.Duration
+		yes      bool
+		dryRun   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "cancel",
 		Short: "Cancel one of your upcoming bookings.",
-		Long: `List upcoming events you've booked and delete the ones you pick.
+		Long: `List upcoming events you've booked and delete the one(s) you pick.
 
-With no flags on an interactive terminal, robin shows a multi-select of
-your upcoming events. Pass --event <id> to cancel one specific event, or
---all to cancel every booking in the window.`,
-		Example: `  # interactive picker
+With no flags on an interactive terminal, robin shows a fuzzy-filterable
+single-select of your upcoming events. Pass --multiple to pick several
+at once (space toggles, no fuzzy search). Pass --event <id> to cancel
+one specific event, or --all to cancel every booking in the window.`,
+		Example: `  # interactive single-select (with fuzzy filter)
   robin cancel
+
+  # multi-select picker (space to toggle)
+  robin cancel --multiple
 
   # cancel a specific event
   robin cancel --event abc123
@@ -72,8 +77,8 @@ your upcoming events. Pass --event <id> to cancel one specific event, or
 			case all:
 				targets = upcoming
 			case io.NoInput || !io.StdinTTY():
-				return fmt.Errorf("specify --event <id> or --all (no terminal for interactive picker)")
-			default:
+				return fmt.Errorf("specify --event <id>, --all, or --multiple (no terminal for interactive picker)")
+			case multiple:
 				targets, err = pickEventsToCancel(upcoming)
 				if err != nil {
 					return err
@@ -81,6 +86,15 @@ your upcoming events. Pass --event <id> to cancel one specific event, or
 				if len(targets) == 0 {
 					return fmt.Errorf("aborted: no events selected")
 				}
+			default:
+				pick, err := pickEventToCancel(upcoming)
+				if err != nil {
+					return err
+				}
+				if pick.ID == "" {
+					return fmt.Errorf("aborted: nothing selected")
+				}
+				targets = []robin.Event{pick}
 			}
 
 			if !yes && !dryRun {
@@ -107,6 +121,7 @@ your upcoming events. Pass --event <id> to cancel one specific event, or
 	}
 	cmd.Flags().StringVar(&eventID, "event", "", "cancel one specific event by ID")
 	cmd.Flags().BoolVar(&all, "all", false, "cancel every upcoming event in the window")
+	cmd.Flags().BoolVarP(&multiple, "multiple", "m", false, "open a multi-select picker instead of single-select")
 	cmd.Flags().DurationVar(&window, "window", 7*24*time.Hour, "look this far ahead for cancellable events")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "show what would be cancelled without calling Robin")
@@ -201,17 +216,31 @@ func cancelMany(io *IO, c *robin.Client, events []robin.Event, dryRun bool) erro
 	return nil
 }
 
+func pickEventToCancel(events []robin.Event) (robin.Event, error) {
+	options := make([]huh.Option[string], 0, len(events))
+	byID := make(map[string]robin.Event, len(events))
+	for _, ev := range events {
+		options = append(options, huh.NewOption(cancelOptionLabel(ev), ev.ID))
+		byID[ev.ID] = ev
+	}
+	var picked string
+	if err := huh.NewSelect[string]().
+		Title("Pick an event to cancel").
+		Description("Type / to filter.").
+		Filtering(true).
+		Options(options...).
+		Value(&picked).
+		Run(); err != nil {
+		return robin.Event{}, fmt.Errorf("cancel: %w", err)
+	}
+	return byID[picked], nil
+}
+
 func pickEventsToCancel(events []robin.Event) ([]robin.Event, error) {
 	options := make([]huh.Option[string], 0, len(events))
 	byID := make(map[string]robin.Event, len(events))
 	for _, ev := range events {
-		start, _ := ev.Start.Time()
-		end, _ := ev.End.Time()
-		label := fmt.Sprintf("%s — %s–%s",
-			titleOrPlaceholder(ev.Title),
-			start.Local().Format("Mon Jan 2 15:04"),
-			end.Local().Format("15:04"))
-		options = append(options, huh.NewOption(label, ev.ID))
+		options = append(options, huh.NewOption(cancelOptionLabel(ev), ev.ID))
 		byID[ev.ID] = ev
 	}
 	var picked []string
@@ -228,6 +257,15 @@ func pickEventsToCancel(events []robin.Event) ([]robin.Event, error) {
 		out = append(out, byID[id])
 	}
 	return out, nil
+}
+
+func cancelOptionLabel(ev robin.Event) string {
+	start, _ := ev.Start.Time()
+	end, _ := ev.End.Time()
+	return fmt.Sprintf("%s — %s–%s",
+		titleOrPlaceholder(ev.Title),
+		start.Local().Format("Mon Jan 2 15:04"),
+		end.Local().Format("15:04"))
 }
 
 func summarizeEvents(events []robin.Event) string {

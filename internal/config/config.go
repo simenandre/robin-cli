@@ -19,14 +19,24 @@ type Config struct {
 }
 
 type QuickBookConfig struct {
-	Location           int64         `json:"location"`
-	Priority           []int         `json:"priority"`
-	MinDurationMinutes int           `json:"min_duration_minutes"`
-	MaxDurationMinutes int           `json:"max_duration_minutes"`
-	WindowMinutes      int           `json:"window_minutes"`
-	TimeZone           string        `json:"time_zone"`
-	Title              string        `json:"title,omitempty"`
-	WorkingHours       *WorkingHours `json:"working_hours,omitempty"`
+	Location            int64            `json:"location"`
+	Priority            []int            `json:"priority"`
+	MinDurationMinutes  int              `json:"min_duration_minutes"`
+	MaxDurationMinutes  int              `json:"max_duration_minutes"`
+	WindowMinutes       int              `json:"window_minutes"`
+	BufferBeforeMinutes int              `json:"buffer_before_minutes,omitempty"`
+	BufferAfterMinutes  int              `json:"buffer_after_minutes,omitempty"`
+	TimeZone            string           `json:"time_zone"`
+	Title               string           `json:"title,omitempty"`
+	WorkingHours        *WorkingHours    `json:"working_hours,omitempty"`
+	Calendars           []CalendarSource `json:"calendars,omitempty"`
+}
+
+// CalendarSource is one iCal feed robin reads to pre-populate the book
+// picker with the user's upcoming meetings.
+type CalendarSource struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // WorkingHours bound the workday — auto-pick uses these to snap a --start

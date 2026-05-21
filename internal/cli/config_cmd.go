@@ -30,6 +30,7 @@ edit your priority room list, or set working hours.`,
 		newConfigSetCmd(io),
 		newConfigPriorityCmd(io),
 		newConfigWorkingHoursCmd(io),
+		newConfigCalendarsCmd(io),
 	)
 	return cmd
 }
@@ -172,10 +173,24 @@ func printConfig(io *IO, cfg *config.Config, reveal bool) {
 	fmt.Fprintf(tw, "  min duration:\t%s\n", formatMinutes(qb.MinDurationMinutes, 30))
 	fmt.Fprintf(tw, "  max duration:\t%s\n", formatMinutes(qb.MaxDurationMinutes, 120))
 	fmt.Fprintf(tw, "  search window:\t%s\n", formatMinutes(qb.WindowMinutes, 30))
+	fmt.Fprintf(tw, "  buffer before:\t%s\n", formatBufferMinutes(qb.BufferBeforeMinutes))
+	fmt.Fprintf(tw, "  buffer after:\t%s\n", formatBufferMinutes(qb.BufferAfterMinutes))
 	fmt.Fprintf(tw, "  time zone:\t%s\n", orDash(qb.TimeZone))
 	fmt.Fprintf(tw, "  default title:\t%s\n", orDash(qb.Title))
 	fmt.Fprintf(tw, "  working hours:\t%s\n", formatWorkingHours(qb.WorkingHours))
+	fmt.Fprintf(tw, "  calendars:\t%s\n", formatCalendarNames(qb.Calendars))
 	tw.Flush()
+}
+
+func formatCalendarNames(cals []config.CalendarSource) string {
+	if len(cals) == 0 {
+		return "—"
+	}
+	parts := make([]string, len(cals))
+	for i, c := range cals {
+		parts[i] = c.Name
+	}
+	return strings.Join(parts, ", ")
 }
 
 func formatPriorityList(p []int) string {
@@ -192,6 +207,13 @@ func formatPriorityList(p []int) string {
 func formatMinutes(v, fallback int) string {
 	if v == 0 {
 		return fmt.Sprintf("%d min  (default)", fallback)
+	}
+	return fmt.Sprintf("%d min", v)
+}
+
+func formatBufferMinutes(v int) string {
+	if v == 0 {
+		return "—"
 	}
 	return fmt.Sprintf("%d min", v)
 }
@@ -255,6 +277,8 @@ Supported keys:
   quick_book.min_duration_minutes  (integer)
   quick_book.max_duration_minutes  (integer)
   quick_book.window_minutes        (integer)
+  quick_book.buffer_before_minutes (integer; 0 to disable)
+  quick_book.buffer_after_minutes  (integer; 0 to disable)
   quick_book.priority              (comma-separated ints, "" to clear)
   quick_book.working_hours.start   (HH:MM, "" to clear)
   quick_book.working_hours.end     (HH:MM, "" to clear)`,
@@ -323,6 +347,16 @@ func getConfigValue(cfg *config.Config, key string, reveal bool) (string, error)
 			return "0", nil
 		}
 		return strconv.Itoa(qb.WindowMinutes), nil
+	case "quick_book.buffer_before_minutes":
+		if qb == nil {
+			return "0", nil
+		}
+		return strconv.Itoa(qb.BufferBeforeMinutes), nil
+	case "quick_book.buffer_after_minutes":
+		if qb == nil {
+			return "0", nil
+		}
+		return strconv.Itoa(qb.BufferAfterMinutes), nil
 	case "quick_book.priority":
 		if qb == nil {
 			return "", nil
@@ -383,6 +417,18 @@ func setConfigValue(cfg *config.Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		ensureQuickBook(cfg).WindowMinutes = n
+	case "quick_book.buffer_before_minutes":
+		n, err := parseNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		ensureQuickBook(cfg).BufferBeforeMinutes = n
+	case "quick_book.buffer_after_minutes":
+		n, err := parseNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		ensureQuickBook(cfg).BufferAfterMinutes = n
 	case "quick_book.priority":
 		nums, err := parsePriorityCSV(value)
 		if err != nil {

@@ -101,6 +101,8 @@ func pickOrg(c *robin.Client) (int64, error) {
 	var picked int64
 	err = huh.NewSelect[int64]().
 		Title("Pick an organization").
+		Description("Type / to filter.").
+		Filtering(true).
 		Options(options...).
 		Value(&picked).
 		Run()
@@ -132,6 +134,8 @@ func pickLocation(c *robin.Client, orgID, current int64) (int64, error) {
 	}
 	err = huh.NewSelect[int64]().
 		Title("Pick a default location for auto-pick").
+		Description("Type / to filter.").
+		Filtering(true).
 		Options(options...).
 		Value(&picked).
 		Run()
@@ -213,7 +217,8 @@ func pickPriorityRooms(c *robin.Client, locationID int64, current []int) ([]int,
 		}
 		err := huh.NewSelect[int]().
 			Title(title).
-			Description(desc).
+			Description(desc + "  Type / to filter.").
+			Filtering(true).
 			Options(options...).
 			Value(&choice).
 			Run()
@@ -285,7 +290,8 @@ func pickTimeZone(current string) (string, error) {
 	}
 	err := huh.NewSelect[string]().
 		Title("Default time zone").
-		Description("Used when --time-zone isn't passed to robin book.").
+		Description("Used when --time-zone isn't passed to robin book. Type / to filter.").
+		Filtering(true).
 		Options(options...).
 		Value(&picked).
 		Run()

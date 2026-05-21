@@ -28,6 +28,9 @@ func newBookCmd(io *IO) *cobra.Command {
 		maxMin           int
 		windowMin        int
 		prioritizeLength bool
+		buffer           time.Duration
+		bufferBefore     time.Duration
+		bufferAfter      time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -67,22 +70,35 @@ Two modes, picked by whether you supply --space:
 			if err != nil {
 				return err
 			}
+			bufBefore, bufAfter := resolveBuffer(cmd, buffer, bufferBefore, bufferAfter)
 			if spaceID != 0 {
 				return runSpecificBook(io, runSpecificBookArgs{
 					spaceID: spaceID, startStr: startStr, endStr: endStr,
 					durationStr: durationStr, title: title, description: description,
 					tz: tz, tzName: tzNameResolved, yes: yes, dryRun: dryRun,
+					bufferBefore: bufBefore, bufferAfter: bufAfter,
 				})
 			}
 			if endStr != "" {
 				return fmt.Errorf("--end is only valid with --space; use --duration in auto-pick mode")
 			}
-			return runAutoPickBook(io, runAutoPickArgs{
+			autoArgs := runAutoPickArgs{
 				startStr: startStr, durationStr: durationStr, title: title,
 				description: description, tz: tz, tzName: tzNameResolved,
 				minMin: minMin, maxMin: maxMin, windowMin: windowMin,
 				prioritizeLength: prioritizeLength, dryRun: dryRun,
-			})
+				bufferBefore: bufBefore, bufferAfter: bufAfter,
+			}
+			if startStr == "" && !io.NoInput && io.StdinTTY() {
+				handled, err := runCalendarPickerBook(io, autoArgs)
+				if err != nil {
+					return err
+				}
+				if handled {
+					return nil
+				}
+			}
+			return runAutoPickBook(io, autoArgs)
 		},
 	}
 
@@ -107,7 +123,39 @@ Two modes, picked by whether you supply --space:
 	cmd.Flags().StringVar(&tzName, "time-zone", "", "IANA timezone (default: from config or Europe/Oslo)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt (specific mode)")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "find / show the booking but don't create it")
+
+	// Buffer (extra time held on each side of the meeting)
+	cmd.Flags().DurationVar(&buffer, "buffer", 0, "shorthand for both --buffer-before and --buffer-after, e.g. 15m")
+	cmd.Flags().DurationVar(&bufferBefore, "buffer-before", 0, "extend the booking by this much before the meeting start, e.g. 5m")
+	cmd.Flags().DurationVar(&bufferAfter, "buffer-after", 0, "extend the booking by this much after the meeting end, e.g. 10m")
 	return cmd
+}
+
+// resolveBuffer picks effective before/after durations.
+//
+// Precedence: specific (--buffer-before / --buffer-after) > shorthand
+// (--buffer) > config (quick_book.buffer_before_minutes / .._after_minutes).
+func resolveBuffer(cmd *cobra.Command, shorthand, before, after time.Duration) (time.Duration, time.Duration) {
+	var cfgBefore, cfgAfter time.Duration
+	if cfg, err := config.Load(); err == nil && cfg.QuickBook != nil {
+		cfgBefore = time.Duration(cfg.QuickBook.BufferBeforeMinutes) * time.Minute
+		cfgAfter = time.Duration(cfg.QuickBook.BufferAfterMinutes) * time.Minute
+	}
+	b := cfgBefore
+	switch {
+	case cmd.Flags().Changed("buffer-before"):
+		b = before
+	case cmd.Flags().Changed("buffer"):
+		b = shorthand
+	}
+	a := cfgAfter
+	switch {
+	case cmd.Flags().Changed("buffer-after"):
+		a = after
+	case cmd.Flags().Changed("buffer"):
+		a = shorthand
+	}
+	return b, a
 }
 
 // resolveTZ chooses tz from --time-zone, then config quick_book.time_zone, else
@@ -136,6 +184,7 @@ type runSpecificBookArgs struct {
 	title, description, tzName       string
 	tz                               *time.Location
 	yes, dryRun                      bool
+	bufferBefore, bufferAfter        time.Duration
 }
 
 func runSpecificBook(io *IO, a runSpecificBookArgs) error {
@@ -170,8 +219,13 @@ func runSpecificBook(io *IO, a runSpecificBookArgs) error {
 		return fmt.Errorf("Robin requires events to be at least 5 minutes")
 	}
 
-	sLocal := start.In(a.tz)
-	eLocal := end.In(a.tz)
+	bookStart := start.Add(-a.bufferBefore)
+	bookEnd := end.Add(a.bufferAfter)
+	sLocal := bookStart.In(a.tz)
+	eLocal := bookEnd.In(a.tz)
+	if a.bufferBefore > 0 || a.bufferAfter > 0 {
+		io.Status("buffer: %v before, %v after", a.bufferBefore, a.bufferAfter)
+	}
 	io.Status("Booking space %d — %s to %s (%v)",
 		a.spaceID, sLocal.Format("Mon Jan 2 15:04"),
 		eLocal.Format("15:04"), eLocal.Sub(sLocal))
@@ -232,6 +286,7 @@ type runAutoPickArgs struct {
 	tz                                                *time.Location
 	minMin, maxMin, windowMin                         int
 	prioritizeLength, dryRun                          bool
+	bufferBefore, bufferAfter                         time.Duration
 }
 
 func runAutoPickBook(io *IO, a runAutoPickArgs) error {
@@ -292,8 +347,15 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 			from = snapped
 		}
 	}
-	latestStart := from.Add(window)
-	queryEnd := latestStart.Add(maxDur)
+	// Buffer extends the booking on each side of the meeting. We fold it
+	// into the picker's search space so the room is provably free for the
+	// whole booked span, then carve the meeting back out for display.
+	totalBuffer := a.bufferBefore + a.bufferAfter
+	effectiveFrom := from.Add(-a.bufferBefore)
+	effectiveMinDur := minDur + totalBuffer
+	effectiveMaxDur := maxDur + totalBuffer
+	latestStart := effectiveFrom.Add(window)
+	queryEnd := latestStart.Add(effectiveMaxDur)
 
 	c, err := authedClient(io)
 	if err != nil {
@@ -324,7 +386,7 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 		toCheck = append(toCheck, s)
 	}
 
-	results := checkSlotsWithProgress(io, c, toCheck, from, latestStart, queryEnd, minDur, maxDur, priIdx)
+	results := checkSlotsWithProgress(io, c, toCheck, effectiveFrom, latestStart, queryEnd, effectiveMinDur, effectiveMaxDur, priIdx)
 
 	priAvail := false
 	for _, r := range results {
@@ -368,18 +430,29 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 		return ai.priorityRank < bj.priorityRank
 	})
 	best := candidates[0]
-	startLocal := best.start.In(a.tz)
-	endLocal := startLocal.Add(best.duration)
+	bookStart := best.start.In(a.tz)
+	bookEnd := bookStart.Add(best.duration)
+	meetingStart := bookStart.Add(a.bufferBefore)
+	meetingEnd := bookEnd.Add(-a.bufferAfter)
+	meetingDur := meetingEnd.Sub(meetingStart)
+
+	if totalBuffer > 0 {
+		io.Status("buffer: %v before, %v after", a.bufferBefore, a.bufferAfter)
+	}
 
 	if a.dryRun {
 		if io.JSON {
-			return io.JSONOut(autoPickJSON(true, "", best, startLocal, endLocal))
+			return io.JSONOut(autoPickJSON(true, "", best, meetingStart, meetingEnd, bookStart, bookEnd, a.bufferBefore, a.bufferAfter))
 		}
-		io.Success("would book %s — %s to %s (%v)",
+		io.Success("would book %s — meeting %s–%s (%v)",
 			best.space.Name,
-			startLocal.Format("Mon Jan 2 15:04"),
-			endLocal.Format("15:04"),
-			best.duration)
+			meetingStart.Format("Mon Jan 2 15:04"),
+			meetingEnd.Format("15:04"),
+			meetingDur)
+		if totalBuffer > 0 {
+			io.Status("room held %s–%s (%v total)",
+				bookStart.Format("15:04"), bookEnd.Format("15:04"), best.duration)
+		}
 		return nil
 	}
 
@@ -390,33 +463,45 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 	req := robin.BookRequest{
 		Title:       title,
 		Description: a.description,
-		Start:       robin.DateTime{DateTime: startLocal.Format(time.RFC3339), TimeZone: a.tzName},
-		End:         robin.DateTime{DateTime: endLocal.Format(time.RFC3339), TimeZone: a.tzName},
+		Start:       robin.DateTime{DateTime: bookStart.Format(time.RFC3339), TimeZone: a.tzName},
+		End:         robin.DateTime{DateTime: bookEnd.Format(time.RFC3339), TimeZone: a.tzName},
 	}
 	ev, err := c.BookSpace(best.space.ID, req)
 	if err != nil {
 		return fmt.Errorf("book %s: %w", best.space.Name, err)
 	}
 	if io.JSON {
-		return io.JSONOut(autoPickJSON(false, ev.ID, best, startLocal, endLocal))
+		return io.JSONOut(autoPickJSON(false, ev.ID, best, meetingStart, meetingEnd, bookStart, bookEnd, a.bufferBefore, a.bufferAfter))
 	}
-	io.Success("booked %s — %s to %s (%v)",
+	io.Success("booked %s — meeting %s–%s (%v)",
 		best.space.Name,
-		startLocal.Format("Mon Jan 2 15:04"),
-		endLocal.Format("15:04"),
-		best.duration)
+		meetingStart.Format("Mon Jan 2 15:04"),
+		meetingEnd.Format("15:04"),
+		meetingDur)
+	if totalBuffer > 0 {
+		io.Status("room held %s–%s (%v total)",
+			bookStart.Format("15:04"), bookEnd.Format("15:04"), best.duration)
+	}
 	io.Status("event id: %s", ev.ID)
 	return nil
 }
 
-func autoPickJSON(dryRun bool, eventID string, s slot, start, end time.Time) map[string]any {
+func autoPickJSON(dryRun bool, eventID string, s slot, meetingStart, meetingEnd, bookStart, bookEnd time.Time, bufBefore, bufAfter time.Duration) map[string]any {
+	meetingDur := meetingEnd.Sub(meetingStart)
 	out := map[string]any{
 		"dry_run":          dryRun,
 		"space_id":         s.space.ID,
 		"space_name":       s.space.Name,
-		"start":            start.Format(time.RFC3339),
-		"end":              end.Format(time.RFC3339),
-		"duration_minutes": int(s.duration / time.Minute),
+		"start":            meetingStart.Format(time.RFC3339),
+		"end":              meetingEnd.Format(time.RFC3339),
+		"duration_minutes": int(meetingDur / time.Minute),
+	}
+	if bufBefore > 0 || bufAfter > 0 {
+		out["buffer_before_minutes"] = int(bufBefore / time.Minute)
+		out["buffer_after_minutes"] = int(bufAfter / time.Minute)
+		out["booked_start"] = bookStart.Format(time.RFC3339)
+		out["booked_end"] = bookEnd.Format(time.RFC3339)
+		out["booked_duration_minutes"] = int(s.duration / time.Minute)
 	}
 	if eventID != "" {
 		out["event_id"] = eventID
