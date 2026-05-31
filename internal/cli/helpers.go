@@ -6,11 +6,14 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/simenandre/robin-cli/internal/config"
 	"github.com/simenandre/robin-cli/internal/robin"
 	naturaldate "github.com/tj/go-naturaldate"
 )
 
-// authedClient returns a Robin client backed by the cached session.
+// authedClient returns a Robin client backed by the cached session. The
+// client knows how to refresh the access token on 401 using saved
+// credentials, so callers don't need to handle expiry themselves.
 func authedClient(io *IO) (*robin.Client, error) {
 	sess, err := robin.LoadSession()
 	if err != nil {
@@ -21,6 +24,13 @@ func authedClient(io *IO) (*robin.Client, error) {
 	}
 	c := robin.New().WithSession(sess)
 	c.Verbose = io.Verbose
+	c.SetAuth(func() (string, string, error) {
+		cfg, err := config.Load()
+		if err != nil {
+			return "", "", err
+		}
+		return cfg.Email, cfg.Password, nil
+	})
 	return c, nil
 }
 

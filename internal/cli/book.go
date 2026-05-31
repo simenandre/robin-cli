@@ -28,6 +28,7 @@ func newBookCmd(io *IO) *cobra.Command {
 		maxMin           int
 		windowMin        int
 		prioritizeLength bool
+		pick             bool
 		buffer           time.Duration
 		bufferBefore     time.Duration
 		bufferAfter      time.Duration
@@ -57,6 +58,7 @@ Two modes, picked by whether you supply --space:
   robin book --when "tomorrow 9am"          # --when is an alias for --start
   robin book --start "tomorrow 9am"         # best room tomorrow at 9
   robin book --start now --duration 1h      # exactly 1h, starting now
+  robin book --pick                         # show available rooms and pick one
   robin book --dry-run                      # see the pick without booking
   robin book --prioritize-length            # take the longest slot anywhere
   robin book --max 60                       # cap at 60 min
@@ -88,6 +90,7 @@ Two modes, picked by whether you supply --space:
 				minMin: minMin, maxMin: maxMin, windowMin: windowMin,
 				prioritizeLength: prioritizeLength, dryRun: dryRun,
 				bufferBefore: bufBefore, bufferAfter: bufAfter,
+				pick: pick,
 			}
 			if startStr == "" && !io.NoInput && io.StdinTTY() {
 				handled, err := runCalendarPickerBook(io, autoArgs)
@@ -116,6 +119,7 @@ Two modes, picked by whether you supply --space:
 	cmd.Flags().IntVar(&maxMin, "max", 0, "auto-pick: maximum booking length in minutes")
 	cmd.Flags().IntVar(&windowMin, "window", 0, "auto-pick: search window past --start in minutes")
 	cmd.Flags().BoolVarP(&prioritizeLength, "prioritize-length", "L", false, "auto-pick: rank by length, ignore priority order")
+	cmd.Flags().BoolVarP(&pick, "pick", "p", false, "auto-pick: show available rooms in a picker instead of auto-selecting")
 
 	// Event content + behavior
 	cmd.Flags().StringVar(&title, "title", "", "event title (Robin auto-generates one if empty)")
@@ -223,6 +227,7 @@ func runSpecificBook(io *IO, a runSpecificBookArgs) error {
 	bookEnd := end.Add(a.bufferAfter)
 	sLocal := bookStart.In(a.tz)
 	eLocal := bookEnd.In(a.tz)
+
 	if a.bufferBefore > 0 || a.bufferAfter > 0 {
 		io.Status("buffer: %v before, %v after", a.bufferBefore, a.bufferAfter)
 	}
@@ -256,26 +261,37 @@ func runSpecificBook(io *IO, a runSpecificBookArgs) error {
 	if err != nil {
 		return err
 	}
-	req := robin.BookRequest{
+	baseReq := robin.BookRequest{
 		Title:       a.title,
 		Description: a.description,
-		Start:       robin.DateTime{DateTime: sLocal.Format(time.RFC3339), TimeZone: a.tzName},
-		End:         robin.DateTime{DateTime: eLocal.Format(time.RFC3339), TimeZone: a.tzName},
 	}
-	ev, err := c.BookSpace(a.spaceID, req)
+	ids, err := bookAdaptive(io, c, a.spaceID, baseReq, sLocal, eLocal, a.tzName, fmt.Sprintf("space %d", a.spaceID), a.yes)
 	if err != nil {
+		if len(ids) > 0 {
+			io.Status("partial booking: %d chunk(s) created (event ids: %s)",
+				len(ids), strings.Join(ids, ", "))
+		}
 		return err
 	}
 	if io.JSON {
-		return io.JSONOut(map[string]any{
-			"event_id":         ev.ID,
+		out := map[string]any{
+			"event_ids":        ids,
 			"space_id":         a.spaceID,
 			"start":            sLocal.Format(time.RFC3339),
 			"end":              eLocal.Format(time.RFC3339),
 			"duration_minutes": int(eLocal.Sub(sLocal) / time.Minute),
-		})
+		}
+		if len(ids) == 1 {
+			out["event_id"] = ids[0]
+		}
+		return io.JSONOut(out)
 	}
-	io.Success("booked event %s", ev.ID)
+	if len(ids) > 1 {
+		io.Success("booked %d chunks in space %d (event ids: %s)",
+			len(ids), a.spaceID, strings.Join(ids, ", "))
+	} else {
+		io.Success("booked event %s", ids[0])
+	}
 	return nil
 }
 
@@ -285,7 +301,7 @@ type runAutoPickArgs struct {
 	startStr, durationStr, title, description, tzName string
 	tz                                                *time.Location
 	minMin, maxMin, windowMin                         int
-	prioritizeLength, dryRun                          bool
+	prioritizeLength, dryRun, pick                    bool
 	bufferBefore, bufferAfter                         time.Duration
 }
 
@@ -429,7 +445,20 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 		}
 		return ai.priorityRank < bj.priorityRank
 	})
-	best := candidates[0]
+
+	var best slot
+	if a.pick {
+		if io.NoInput || !io.StdinTTY() {
+			return fmt.Errorf("--pick requires a terminal")
+		}
+		chosen, err := promptRoomPick(candidates, a.tz, a.bufferBefore, a.bufferAfter)
+		if err != nil {
+			return err
+		}
+		best = chosen
+	} else {
+		best = candidates[0]
+	}
 	bookStart := best.start.In(a.tz)
 	bookEnd := bookStart.Add(best.duration)
 	meetingStart := bookStart.Add(a.bufferBefore)
@@ -442,7 +471,7 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 
 	if a.dryRun {
 		if io.JSON {
-			return io.JSONOut(autoPickJSON(true, "", best, meetingStart, meetingEnd, bookStart, bookEnd, a.bufferBefore, a.bufferAfter))
+			return io.JSONOut(autoPickJSON(true, nil, best, meetingStart, meetingEnd, bookStart, bookEnd, a.bufferBefore, a.bufferAfter))
 		}
 		io.Success("would book %s — meeting %s–%s (%v)",
 			best.space.Name,
@@ -460,33 +489,39 @@ func runAutoPickBook(io *IO, a runAutoPickArgs) error {
 	if title == "" {
 		title = qb.Title
 	}
-	req := robin.BookRequest{
+	baseReq := robin.BookRequest{
 		Title:       title,
 		Description: a.description,
-		Start:       robin.DateTime{DateTime: bookStart.Format(time.RFC3339), TimeZone: a.tzName},
-		End:         robin.DateTime{DateTime: bookEnd.Format(time.RFC3339), TimeZone: a.tzName},
 	}
-	ev, err := c.BookSpace(best.space.ID, req)
+	ids, err := bookAdaptive(io, c, best.space.ID, baseReq, bookStart, bookEnd, a.tzName, best.space.Name, false)
 	if err != nil {
+		if len(ids) > 0 {
+			io.Status("partial booking: %d chunk(s) created (event ids: %s)",
+				len(ids), strings.Join(ids, ", "))
+		}
 		return fmt.Errorf("book %s: %w", best.space.Name, err)
 	}
 	if io.JSON {
-		return io.JSONOut(autoPickJSON(false, ev.ID, best, meetingStart, meetingEnd, bookStart, bookEnd, a.bufferBefore, a.bufferAfter))
+		return io.JSONOut(autoPickJSON(false, ids, best, meetingStart, meetingEnd, bookStart, bookEnd, a.bufferBefore, a.bufferAfter))
 	}
 	io.Success("booked %s — meeting %s–%s (%v)",
 		best.space.Name,
 		meetingStart.Format("Mon Jan 2 15:04"),
 		meetingEnd.Format("15:04"),
 		meetingDur)
-	if totalBuffer > 0 {
-		io.Status("room held %s–%s (%v total)",
-			bookStart.Format("15:04"), bookEnd.Format("15:04"), best.duration)
+	if len(ids) > 1 {
+		io.Status("event ids: %s", strings.Join(ids, ", "))
+	} else {
+		if totalBuffer > 0 {
+			io.Status("room held %s–%s (%v total)",
+				bookStart.Format("15:04"), bookEnd.Format("15:04"), best.duration)
+		}
+		io.Status("event id: %s", ids[0])
 	}
-	io.Status("event id: %s", ev.ID)
 	return nil
 }
 
-func autoPickJSON(dryRun bool, eventID string, s slot, meetingStart, meetingEnd, bookStart, bookEnd time.Time, bufBefore, bufAfter time.Duration) map[string]any {
+func autoPickJSON(dryRun bool, eventIDs []string, s slot, meetingStart, meetingEnd, bookStart, bookEnd time.Time, bufBefore, bufAfter time.Duration) map[string]any {
 	meetingDur := meetingEnd.Sub(meetingStart)
 	out := map[string]any{
 		"dry_run":          dryRun,
@@ -503,8 +538,11 @@ func autoPickJSON(dryRun bool, eventID string, s slot, meetingStart, meetingEnd,
 		out["booked_end"] = bookEnd.Format(time.RFC3339)
 		out["booked_duration_minutes"] = int(s.duration / time.Minute)
 	}
-	if eventID != "" {
-		out["event_id"] = eventID
+	if len(eventIDs) > 0 {
+		out["event_ids"] = eventIDs
+		if len(eventIDs) == 1 {
+			out["event_id"] = eventIDs[0]
+		}
 	}
 	return out
 }

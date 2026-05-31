@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,9 +21,10 @@ const (
 )
 
 type Client struct {
-	http    *http.Client
-	session *Session
-	Verbose bool
+	http       *http.Client
+	session    *Session
+	Verbose    bool
+	authLoader func() (email, password string, err error)
 }
 
 func New() *Client {
@@ -31,6 +34,13 @@ func New() *Client {
 func (c *Client) WithSession(s *Session) *Client {
 	c.session = s
 	return c
+}
+
+// SetAuth registers a callback the client can use to fetch credentials when
+// it hits a 401. After a successful relogin the new session is saved to disk
+// and the original request is retried once.
+func (c *Client) SetAuth(loader func() (email, password string, err error)) {
+	c.authLoader = loader
 }
 
 func (c *Client) Session() *Session { return c.session }
@@ -44,13 +54,151 @@ func (c *Client) logf(format string, args ...any) {
 
 type apiEnvelope struct {
 	Meta struct {
-		StatusCode int    `json:"status_code"`
-		Status     string `json:"status"`
-		Message    string `json:"message"`
-		Errors     []any  `json:"errors"`
-		MoreInfo   any    `json:"more_info"`
+		StatusCode int              `json:"status_code"`
+		Status     string           `json:"status"`
+		Message    string           `json:"message"`
+		Errors     []APIErrorDetail `json:"errors"`
+		MoreInfo   map[string]any   `json:"more_info"`
 	} `json:"meta"`
 	Data json.RawMessage `json:"data"`
+}
+
+// APIError is what every Robin 4xx/5xx response decodes to. Use errors.As to
+// inspect structured fields when handling errors from the client.
+//
+// Robin uses two side-channels for error detail:
+//   - Errors[]: structured policy violations (e.g. booking_policy_violation
+//     with details.max_length on too-long bookings).
+//   - MoreInfo: a field→messages map used for validation errors like calendar
+//     conflicts ("started_at and ended_at": ["overlaps event titled ..."]).
+//
+// The Error() string falls back through both so the user always sees the
+// most actionable detail Robin returned.
+type APIError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Message    string
+	Errors     []APIErrorDetail
+	MoreInfo   map[string]any
+}
+
+// APIErrorDetail is one entry in apiEnvelope.Meta.Errors. Reason and Details
+// carry the policy-specific information (e.g. booking_policy_violation with
+// details.max_length when a booking exceeds the cap).
+type APIErrorDetail struct {
+	Domain  string         `json:"domain"`
+	Reason  string         `json:"reason"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details"`
+}
+
+func (e *APIError) Error() string {
+	base := fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.StatusCode, e.Message)
+	if extra := e.detail(); extra != "" {
+		return base + " — " + extra
+	}
+	return base
+}
+
+// detail returns a short human-readable summary of the structured error
+// fields, preferring Errors[] (policy violations) then MoreInfo (field
+// validation, e.g. calendar conflicts). Empty string when nothing useful.
+func (e *APIError) detail() string {
+	if len(e.Errors) > 0 {
+		msgs := make([]string, 0, len(e.Errors))
+		for _, d := range e.Errors {
+			if d.Message != "" {
+				msgs = append(msgs, d.Message)
+			}
+		}
+		if len(msgs) > 0 {
+			return strings.Join(msgs, "; ")
+		}
+		b, _ := json.Marshal(e.Errors)
+		return "errors: " + string(b)
+	}
+	if len(e.MoreInfo) > 0 {
+		var parts []string
+		for field, v := range e.MoreInfo {
+			switch tv := v.(type) {
+			case []any:
+				for _, m := range tv {
+					parts = append(parts, fmt.Sprintf("%s: %v", field, m))
+				}
+			default:
+				parts = append(parts, fmt.Sprintf("%s: %v", field, tv))
+			}
+		}
+		return strings.Join(parts, "; ")
+	}
+	return ""
+}
+
+// TooLongBooking inspects the error details for the booking-length cap Robin
+// reports as ISO-8601 PT duration (e.g. "PT2H"). Returns (cap, true) when
+// the error tells us a max_length; (0, false) otherwise.
+func (e *APIError) TooLongBooking() (time.Duration, bool) {
+	for _, d := range e.Errors {
+		v, ok := d.Details["max_length"].(string)
+		if !ok {
+			continue
+		}
+		if dur, err := parseISO8601PTDuration(v); err == nil && dur > 0 {
+			return dur, true
+		}
+	}
+	return 0, false
+}
+
+// AsAPIError unwraps err looking for a *APIError. Convenience wrapper around
+// errors.As so call sites stay terse.
+func AsAPIError(err error) (*APIError, bool) {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae, true
+	}
+	return nil, false
+}
+
+// parseISO8601PTDuration parses the time-only ISO 8601 duration form Robin
+// emits: PT1H30M, PT45S, PT2H. The date portion (P1DT...) is not supported.
+func parseISO8601PTDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "PT") {
+		return 0, fmt.Errorf("not a PT duration: %q", s)
+	}
+	rest := s[2:]
+	if rest == "" {
+		return 0, fmt.Errorf("empty PT duration: %q", s)
+	}
+	var total time.Duration
+	var num strings.Builder
+	for _, r := range rest {
+		if r >= '0' && r <= '9' {
+			num.WriteRune(r)
+			continue
+		}
+		n, err := strconv.Atoi(num.String())
+		if err != nil {
+			return 0, fmt.Errorf("invalid number in %q", s)
+		}
+		num.Reset()
+		switch r {
+		case 'H':
+			total += time.Duration(n) * time.Hour
+		case 'M':
+			total += time.Duration(n) * time.Minute
+		case 'S':
+			total += time.Duration(n) * time.Second
+		default:
+			return 0, fmt.Errorf("unknown unit %q in %q", r, s)
+		}
+	}
+	if num.Len() > 0 {
+		return 0, fmt.Errorf("trailing number without unit in %q", s)
+	}
+	return total, nil
 }
 
 // Login exchanges email/password for an access token via the Robin core API.
@@ -122,6 +270,40 @@ func (c *Client) Post(pathAndQuery string, body, out any) error {
 }
 
 func (c *Client) do(method, pathAndQuery string, body, out any) error {
+	return c.doWithRetry(method, pathAndQuery, body, out, true)
+}
+
+func (c *Client) doWithRetry(method, pathAndQuery string, body, out any, allowRetry bool) error {
+	err := c.doOnce(method, pathAndQuery, body, out)
+	if err == nil {
+		return nil
+	}
+	if !allowRetry || c.authLoader == nil {
+		return err
+	}
+	apiErr, ok := AsAPIError(err)
+	if !ok || apiErr.StatusCode != 401 {
+		return err
+	}
+	c.logf("got 401, refreshing access token and retrying once")
+	email, pw, lerr := c.authLoader()
+	if lerr != nil {
+		c.logf("auth loader failed: %v", lerr)
+		return err
+	}
+	sess, lerr := c.Login(email, pw, nil)
+	if lerr != nil {
+		c.logf("relogin failed: %v", lerr)
+		return err
+	}
+	if serr := SaveSession(sess); serr != nil {
+		c.logf("warning: could not persist refreshed session: %v", serr)
+	}
+	c.session = sess
+	return c.doWithRetry(method, pathAndQuery, body, out, false)
+}
+
+func (c *Client) doOnce(method, pathAndQuery string, body, out any) error {
 	if c.session == nil || c.session.AccessToken == "" {
 		return fmt.Errorf("not authenticated — run `robin login` first")
 	}
@@ -157,14 +339,17 @@ func (c *Client) do(method, pathAndQuery string, body, out any) error {
 		var env apiEnvelope
 		_ = json.Unmarshal(rb, &env)
 		msg := env.Meta.Message
-		if len(env.Meta.Errors) > 0 {
-			eb, _ := json.Marshal(env.Meta.Errors)
-			msg = msg + " | errors: " + string(eb)
-		}
 		if msg == "" {
 			msg = truncate(string(rb), 500)
 		}
-		return fmt.Errorf("%s %s: %d %s", method, pathAndQuery, resp.StatusCode, msg)
+		return &APIError{
+			Method:     method,
+			Path:       pathAndQuery,
+			StatusCode: resp.StatusCode,
+			Message:    msg,
+			Errors:     env.Meta.Errors,
+			MoreInfo:   env.Meta.MoreInfo,
+		}
 	}
 	if out == nil {
 		return nil

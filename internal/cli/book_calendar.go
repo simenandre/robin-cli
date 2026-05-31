@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -205,8 +204,7 @@ func bookForCalendarEvent(io *IO, c *robin.Client, cfg *config.Config, ev calend
 
 	bookDur := bookEnd.Sub(bookStart)
 	results := checkSlotsWithProgress(io, c, toCheck, bookStart, bookStart, bookEnd.Add(time.Minute), bookDur, bookDur, priIdx)
-	var pick *robin.Space
-	bestRank := math.MaxInt
+	var available []slot
 	for _, r := range results {
 		if !r.available {
 			continue
@@ -214,14 +212,28 @@ func bookForCalendarEvent(io *IO, c *robin.Client, cfg *config.Config, ev calend
 		if r.start.After(bookStart) {
 			continue
 		}
-		if r.priorityRank < bestRank {
-			s := r.space
-			pick = &s
-			bestRank = r.priorityRank
-		}
+		available = append(available, r)
 	}
-	if pick == nil {
+	if len(available) == 0 {
 		return fmt.Errorf("no rooms free for %s", formatEventTime(bookStart, bookEnd))
+	}
+	sort.SliceStable(available, func(i, j int) bool {
+		return available[i].priorityRank < available[j].priorityRank
+	})
+	var pick *robin.Space
+	if a.pick {
+		if io.NoInput || !io.StdinTTY() {
+			return fmt.Errorf("--pick requires a terminal")
+		}
+		chosen, err := promptRoomPick(available, a.tz, a.bufferBefore, a.bufferAfter)
+		if err != nil {
+			return err
+		}
+		s := chosen.space
+		pick = &s
+	} else {
+		s := available[0].space
+		pick = &s
 	}
 
 	title := a.title
@@ -249,20 +261,25 @@ func bookForCalendarEvent(io *IO, c *robin.Client, cfg *config.Config, ev calend
 		}
 		return nil
 	}
-	req := robin.BookRequest{
+	baseReq := robin.BookRequest{
 		Title:       title,
 		Description: description,
-		Start:       robin.DateTime{DateTime: bookStart.Format(time.RFC3339), TimeZone: a.tzName},
-		End:         robin.DateTime{DateTime: bookEnd.Format(time.RFC3339), TimeZone: a.tzName},
 	}
-	booking, err := c.BookSpace(pick.ID, req)
+	ids, err := bookAdaptive(io, c, pick.ID, baseReq, bookStart, bookEnd, a.tzName, pick.Name, false)
 	if err != nil {
+		if len(ids) > 0 {
+			io.Status("partial booking: %d chunk(s) created (event ids: %v)", len(ids), ids)
+		}
 		return err
 	}
 	io.Success("booked %s for %q — meeting %s", pick.Name, title, formatEventTime(meetingStart, meetingEnd))
-	if a.bufferBefore > 0 || a.bufferAfter > 0 {
-		io.Status("room held %s–%s", bookStart.Format("15:04"), bookEnd.Format("15:04"))
+	if len(ids) > 1 {
+		io.Status("event ids: %v", ids)
+	} else {
+		if a.bufferBefore > 0 || a.bufferAfter > 0 {
+			io.Status("room held %s–%s", bookStart.Format("15:04"), bookEnd.Format("15:04"))
+		}
+		io.Status("event id: %s", ids[0])
 	}
-	io.Status("event id: %s", booking.ID)
 	return nil
 }
