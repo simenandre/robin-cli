@@ -269,6 +269,10 @@ func (c *Client) Post(pathAndQuery string, body, out any) error {
 	return c.do(http.MethodPost, pathAndQuery, body, out)
 }
 
+func (c *Client) Put(pathAndQuery string, body, out any) error {
+	return c.do(http.MethodPut, pathAndQuery, body, out)
+}
+
 func (c *Client) do(method, pathAndQuery string, body, out any) error {
 	return c.doWithRetry(method, pathAndQuery, body, out, true)
 }
@@ -553,7 +557,7 @@ func (c *Client) MyEvents(after, before time.Time) ([]Event, error) {
 // server-side: this can return 4xx for events that are too early, too late,
 // or already confirmed.
 func (c *Client) ConfirmEvent(eventID string) error {
-	return c.Post(fmt.Sprintf("/events/%s/confirmation", eventID), nil, nil)
+	return c.Put(fmt.Sprintf("/events/%s/confirmation", eventID), nil, nil)
 }
 
 // DeleteEvent cancels an event. Robin returns 204 on success, 404 if the
